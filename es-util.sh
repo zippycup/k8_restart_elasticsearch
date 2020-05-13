@@ -2,7 +2,13 @@
 
 # implementation of : https://www.elastic.co/guide/en/elasticsearch/reference/current/restart-cluster.html
 
-node_regex='^es-'
+initial_host=es-master-0
+master_regex='^es-master-'
+data_regex='^es-data-'
+default_regex='^es-'
+master_pvc=50Gi
+data_pvc=100Gi
+
 
 disable_shard=$(cat << EOF
 {
@@ -24,7 +30,7 @@ EOF
 
 usage() {
   echo "usage: sh $0 -m [mode] -n [namespace]"
-  echo "mode: restart|enable_shard|disable_shard|get_nodes|node_status|health"
+  echo  "                 mode: restart|enable_shard|disable_shard|get_nodes"
   echo
   exit 0
 }
@@ -33,7 +39,31 @@ set_nodes() {
   echo "get nodes/set host ..."
   nodes=`kubectl -n ${namespace} get pod | grep ${node_regex} | awk '{print $1}'| sort`
   
-  tmphost=`kubectl -n ${namespace} exec -it es-master-0 -- curl http://localhost:9200/_cat/nodes | grep '\*' | awk '{print $10}' | sed 's/\r$//g'`
+  active_host
+}
+
+active_host() {
+
+  if [ x"${host}" == "x" ]
+  then
+    host=${initial_host}
+  fi
+
+  ((i=0))
+  while true
+  do
+    sleep 5
+    ((i++))
+    echo "[${i}] Waiting for active node ..."
+    kubectl -n ${namespace} exec -it ${host} -- curl http://localhost:9200/_cat/nodes | grep '\*' > /dev/null  2>&1
+
+    if [ "$?" -eq 0 ]
+    then
+      break
+    fi
+  done
+
+  tmphost=`kubectl -n ${namespace} exec -it ${host} -- curl http://localhost:9200/_cat/nodes | grep '\*' | awk '{print $10}' | sed 's/\r$//g'`
   host=${tmphost::${#tmphost}-1}
 
   echo "set initial node: ${host}"
@@ -120,9 +150,9 @@ restart_pod() {
   pod=$1
 
   echo
-  echo '-------------------------------
+  echo '-------------------------------'
   echo " current pod: ${pod}"
-  echo '-------------------------------
+  echo '-------------------------------'
 
   disable_shard
  
@@ -145,7 +175,7 @@ restart_pod() {
 
   if  [ ${pod} == "${host}" ]
   then
-    set_nodes
+    active_host
   fi
 
   echo "check node:${pod} in cluster"
@@ -179,12 +209,28 @@ enable_shard() {
   check_cluster
 }
 
-options='m:n:'
+resize() {
+  for i in ${nodes}
+  do
+    nodetype=`echo ${i} | awk '{split($0,a,"-");print a[2]}'`
+    case ${nodetype} in
+      master) capacity=${master_pvc};;
+        data) capacity=${data_pvc};;
+    esac
+    claim=`kubectl get pod ${i} -n ${namespace} -oyaml | grep 'claimName:' | awk '{print $2}'`
+    echo "pvc      : ${claim}"
+    echo "capacity : ${capacity}"
+    kubectl patch pvc ${claim} -p "{ \"spec\": { \"resources\": { \"requests\": { \"storage\": \"${capacity}\" }}}}" -n ${namespace}
+  done
+}
+
+options='m:n:t:'
 while getopts ${options} option
 do
   case $option in
     m) mode=${OPTARG};;
     n) namespace=${OPTARG};;
+    t) type=${OPTARG};;
     *) usage;;
   esac
 done
@@ -193,6 +239,13 @@ if [ -z "${mode}" ] || [ -z "${namespace}" ]
 then
   usage
 fi
+
+case ${type} in
+  master) node_regex=${master_regex};;
+    data) node_regex=${data_regex};;
+       *) node_regex=${default_regex};;
+esac
+
 
 echo '==========================='
 echo " namespace : ${namespace}"
@@ -206,11 +259,18 @@ case ${mode} in
            health unassigned_shards
            for i in ${nodes};do restart_pod ${i};done
   ;;
+  resize)  set_nodes
+           health status init_check
+           health unassigned_shards
+           resize
+           for i in ${nodes};do restart_pod ${i};done
+           kubectl -n ${namespace} get pvc
+  ;;
   enable_shard) set_nodes
-               enable_shard
+                enable_shard
   ;;
   disable_shard) set_nodes 
-                disable_shard
+                 disable_shard
   ;;
   get_nodes) set_nodes
              echo " === nodes ==="
