@@ -23,6 +23,7 @@ The steps ensure that the cluster is healthy at each node restart preventing cor
 * ~/.kube/config configured
 * jq fromi https://stedolan.github.io/jq/download/
 * linux / mac bash environment ( e.g. sed, awk, grep )
+* tested on version: 7.6.x
 
 ## Installation
 
@@ -34,14 +35,14 @@ These nodes types are deployed via a statefulset es-master and es-data.
 
 - Copy es-util.sh to your computer
 - Edit these settings:
-
+```
   initial_host=es-master-0
   master_regex='^es-master-'
   data_regex='^es-data-'
   default_regex='^es-'
   master_pvc=50Gi
   data_pvc=100Gi
-
+```
 - if you desire to resize persistent volume, update and deploy the statefulset first before running utility  with the updated volumeclaim size. The pattern for this is:
   - delete statefulset
   - deploy new statefulset
