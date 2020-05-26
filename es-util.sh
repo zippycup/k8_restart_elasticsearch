@@ -2,12 +2,15 @@
 
 # implementation of : https://www.elastic.co/guide/en/elasticsearch/reference/current/restart-cluster.html
 
+auth_user=elastic
+es_util_file=secret/current/es-util.txt
 initial_host=es-master-0
 master_regex='^es-master-'
 data_regex='^es-data-'
 default_regex='^es-'
 master_pvc=50Gi
 data_pvc=100Gi
+http=https
 
 
 disable_shard=$(cat << EOF
@@ -29,20 +32,22 @@ EOF
 )
 
 usage() {
-  echo "usage: sh $0 -m [mode] -n [namespace]"
-  echo  "                 mode: restart|enable_shard|disable_shard|get_nodes"
+  echo "usage: sh $0 -m [mode] -n [namespace] -s [http|https]"
+  echo  "                 mode: restart|enable_shard|disable_shard|get_nodes|health|check_cluster"
   echo
   exit 0
 }
 
 set_nodes() {
-  echo "get nodes/set host ..."
+  echo "get nodes ..."
   nodes=`kubectl -n ${namespace} get pod | grep ${node_regex} | awk '{print $1}'| sort`
   
   active_host
 }
 
 active_host() {
+
+  echo "set active node as host ..."
 
   if [ x"${host}" == "x" ]
   then
@@ -55,7 +60,7 @@ active_host() {
     sleep 5
     ((i++))
     echo "[${i}] Waiting for active node ..."
-    kubectl -n ${namespace} exec -it ${host} -- curl http://localhost:9200/_cat/nodes | grep '\*' > /dev/null  2>&1
+    kubectl -n ${namespace} exec -it ${host} -- curl ${auth} ${curl_parm} ${http}://localhost:9200/_cat/nodes | grep '\*' > /dev/null 2>&1
 
     if [ "$?" -eq 0 ]
     then
@@ -63,7 +68,7 @@ active_host() {
     fi
   done
 
-  tmphost=`kubectl -n ${namespace} exec -it ${host} -- curl http://localhost:9200/_cat/nodes | grep '\*' | awk '{print $10}' | sed 's/\r$//g'`
+  tmphost=`kubectl -n ${namespace} exec -it ${host} -- curl ${auth} ${curl_parm} ${http}://localhost:9200/_cat/nodes | grep '\*' | awk '{print $10}' | sed 's/\r$//g'`
   host=${tmphost::${#tmphost}-1}
 
   echo "set initial node: ${host}"
@@ -75,7 +80,7 @@ active_host() {
 }
 
 get_health() {
-  kubectl -n ${namespace} exec -it ${host} -- curl http://localhost:9200/_cluster/health?pretty
+  kubectl -n ${namespace} exec -it ${host} -- curl ${auth} ${curl_parm} ${http}://localhost:9200/_cluster/health?pretty
 }
 
 health() {
@@ -91,7 +96,7 @@ health() {
        exit
     ;;
    esac
-  health_value=`kubectl -n ${namespace} exec -it ${host} -- curl http://localhost:9200/_cluster/health?pretty | jq ".${parm1}"`
+  health_value=`kubectl -n ${namespace} exec -it ${host} -- curl ${auth} ${curl_parm} ${http}://localhost:9200/_cluster/health?pretty | jq ".${parm1}"`
 
   if [ "${health_value}" == "${good_health}" ]
   then
@@ -124,7 +129,11 @@ check_cluster() {
 }
 
 node_status () {
-    kubectl -n ${namespace} exec -it ${host} -- curl localhost:9200/_cat/nodes
+  kubectl -n ${namespace} exec -it ${host} -- curl ${auth} ${curl_parm} ${http}://localhost:9200/_cat/nodes
+}
+
+indices () {
+  kubectl -n ${namespace} exec -it ${host} -- curl ${auth} ${curl_parm} ${http}://localhost:9200/_cat/indices
 }
 
 node_in_cluster() { 
@@ -138,7 +147,7 @@ node_in_cluster() {
     echo "[${i}] Waiting for $current_pod in cluster ..."
 
     kubectl -n ${namespace} exec -it ${host} -- \
-    curl localhost:9200/_cat/nodes | grep ${pod}
+     curl ${auth} ${curl_parm} ${http}://localhost:9200/_cat/nodes | grep ${pod}
     if [ "$?" -eq 0 ]
     then
       break
@@ -186,25 +195,25 @@ restart_pod() {
 disable_shard() {
   echo "disable sharding"
   kubectl -n ${namespace} exec -it ${host} -- \
-  curl -XPUT -H 'Content-Type: application/json' 'localhost:9200/_cluster/settings' -d "${disable_shard}"
+   curl ${auth} ${curl_parm} -XPUT -H 'Content-Type: application/json' ${http}://localhost:9200/_cluster/settings -d "${disable_shard}"
 
   echo "stop indexing and perform a synced flush"
   kubectl -n ${namespace} exec -it ${host} -- \
-  curl -XPOST -H 'Content-Type: application/json' 'localhost:9200/_flush/synced'
+   curl ${auth} ${curl_parm} -XPOST -H 'Content-Type: application/json' ${http}://localhost:9200/_flush/synced
 
   echo "stop learning jobs and datafeeds"
   kubectl -n ${namespace} exec -it ${host} -- \
-  curl -XPOST -H 'Content-Type: application/json' 'localhost:9200/_ml/set_upgrade_mode?enabled=true'
+   curl ${auth} ${curl_parm} -XPOST -H 'Content-Type: application/json' ${http}://localhost:9200/_ml/set_upgrade_mode?enabled=true
 }
 
 enable_shard() {
   echo "enable sharding"
   kubectl -n ${namespace} exec -it ${host} -- \
-  curl -XPUT -H 'Content-Type: application/json' 'localhost:9200/_cluster/settings' -d "${enable_shard}"
+   curl ${auth} ${curl_parm} -XPUT -H 'Content-Type: application/json' ${http}://localhost:9200/_cluster/settings -d "${enable_shard}"
 
   echo "Start learning jobs and datafeeds"
   kubectl -n ${namespace} exec -it ${host} -- \
-  curl -XPOST -H 'Content-Type: application/json' 'localhost:9200/_ml/set_upgrade_mode?enabled=false'
+   curl ${auth} ${curl_parm} -XPOST -H 'Content-Type: application/json' ${http}://localhost:9200/_ml/set_upgrade_mode?enabled=false
 
   check_cluster
 }
@@ -224,16 +233,24 @@ resize() {
   done
 }
 
-options='m:n:t:'
+options='m:n:t:s:'
 while getopts ${options} option
 do
   case $option in
     m) mode=${OPTARG};;
     n) namespace=${OPTARG};;
     t) type=${OPTARG};;
+    s) http=${OPTARG};;
     *) usage;;
   esac
 done
+
+if [ "${http}" == "https" ]
+then
+  curl_parm="-k"
+else
+  curl_parm=""
+fi
 
 if [ -z "${mode}" ] || [ -z "${namespace}" ]
 then
@@ -246,6 +263,13 @@ case ${type} in
        *) node_regex=${default_regex};;
 esac
 
+if [ -f ${es_util_file} ]
+then
+  source ${es_util_file}
+  auth="-u ${auth_user}:${auth_pass::${#auth_pass}-1}"
+else
+  auth=''
+fi
 
 echo '==========================='
 echo " namespace : ${namespace}"
@@ -281,6 +305,12 @@ case ${mode} in
   ;;
   health) set_nodes
           get_health
+  ;;
+  check_cluster) set_nodes
+                 check_cluster
+  ;;
+  indices) set_nodes
+           indices
   ;;
   *) usage
   ;;

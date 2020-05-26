@@ -29,9 +29,25 @@ The steps ensure that the cluster is healthy at each node restart preventing cor
 
 The utility makes the assumption that the cluster has 2 types of nodes:
 - master
-- data 
+- data
 
 These nodes types are deployed via a statefulset es-master and es-data.
+
+If you are enabling xpack with basic realm password and transport/http security, add 'elastic' user password in secret/currrent/secret ( elasticsearch-setup-passwords ).
+
+```
+vi secret/current/secret
+auth_pass: xxxxxx
+```
+
+I automated extracting elastic password to write to secret file so it will remove the last character, so it may not work if you just add the password to the secret file. 
+
+change
+``` 
+auth="-u ${auth_user}:${auth_pass::${#auth_pass}-1}"
+to
+auth="-u ${auth_user}:${auth_pass}"
+```
 
 - Copy es-util.sh to your computer
 - Edit these settings:
@@ -43,7 +59,8 @@ These nodes types are deployed via a statefulset es-master and es-data.
   master_pvc=50Gi
   data_pvc=100Gi
 ```
-- if you desire to resize persistent volume, update and deploy the statefulset first before running utility  with the updated volumeclaim size. The pattern for this is:
+
+- if you desire to resize persistent volume, update and deploy the statefulset first before running utility with the updated volumeclaim size. The pattern for this is:
   - delete statefulset
   - deploy new statefulset
   - run resize script
@@ -68,9 +85,11 @@ Please refer the the sample wrapper script to the restart/resize script called: 
 
 
 ```
- sh es-util.sh -m [mode] -n [namespace] -t [type: master|data]
+ sh es-util.sh -m [mode] -n [namespace] -t [type: master|data] -s [http|https]
  mode: restart|enable_shard|disable_shard|get_nodes|node_status|health|resize
 ```
+
+Note: default is https ( xpack security enabled )
 
 examples
 ```
