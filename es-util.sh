@@ -226,7 +226,7 @@ resize() {
       master) capacity=${master_pvc};;
         data) capacity=${data_pvc};;
     esac
-    claim=`kubectl get pod ${i} -n ${namespace} -oyaml | grep 'claimName:' | grep 'f.claimName:' | awk '{print $2}'`
+    claim=`kubectl get pod ${i} -n ${namespace} -oyaml | grep 'claimName:' | grep -v 'f.claimName' | awk '{print $2}'`
     echo "pvc      : ${claim}"
     echo "capacity : ${capacity}"
     kubectl patch pvc ${claim} -p "{ \"spec\": { \"resources\": { \"requests\": { \"storage\": \"${capacity}\" }}}}" -n ${namespace}
